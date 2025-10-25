@@ -210,7 +210,7 @@ export default function MainPage() {
           {/* Welcome card */}
           <View style={styles.welcomeCard}>
             <ImageBackground
-              source={require('../assets/images/welcome_img.png')}
+              source={require('../assets/images/Welcome_Image_updated.png')}
               style={styles.backgroundImage}
               imageStyle={{ borderRadius: 16, resizeMode: 'cover' }}
             >
