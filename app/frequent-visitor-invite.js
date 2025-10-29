@@ -4,12 +4,14 @@ import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import { addDoc, collection, getFirestore, serverTimestamp } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CrossPlatformDatePicker } from '../components/CrossPlatformDatePicker';
 import { app } from '../firebaseConfig';
 import { styles } from '../StylingSheets/frequentVisitorInviteStyles';
+
+const DURATION_OPTIONS = ['1 Day', '1 Week', '1 Month', '>1 Month'];
 
 export default function FrequentVisitorInvite() {
   const router = useRouter();
@@ -22,77 +24,85 @@ export default function FrequentVisitorInvite() {
   const [location, setLocation] = useState('');
 
   const [duration, setDuration] = useState('1 Week');
-  const DURATION_OPTIONS = ['1 Week', '1 Month', '>1 Month'];
-
   const [startDate, setStartDate] = useState(new Date());
-  const [endDate, setEndDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+  const [endDate, setEndDate] = useState(new Date());
 
   const [passcode, setPasscode] = useState('');
   const [inviteCreated, setInviteCreated] = useState(false);
 
   useEffect(() => {
-    loadUserData();
+    (async () => {
+      try {
+        const userData = await AsyncStorage.getItem('userDetails');
+        if (userData) {
+          const u = JSON.parse(userData);
+          setUserName(u.name || 'User');
+          setFlatNumber(u.flatNumber || '');
+          setBuilding(u.building || '');
+          setLocation(
+            u.flatNumber && u.building ? `Block - ${u.flatNumber}, ${u.building}` : ''
+          );
+        }
+      } catch (e) {
+        console.error('Error loading user data:', e);
+      }
+    })();
   }, []);
 
-  useEffect(() => {
-    // Auto-calculate end date based on selected duration
-    if (duration === '1 Week') {
-      setEndDate(new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000));
-    } else if (duration === '1 Month') {
-      const newEndDate = new Date(startDate);
-      newEndDate.setMonth(newEndDate.getMonth() + 1);
-      setEndDate(newEndDate);
+  // Compute desired end date from start + duration.
+  const computedEnd = useMemo(() => {
+    const d = new Date(startDate);
+    switch (duration) {
+      case '1 Day':
+        d.setDate(d.getDate() + 1);
+        return d;
+      case '1 Week':
+        d.setDate(d.getDate() + 7);
+        return d;
+      case '1 Month':
+        d.setMonth(d.getMonth() + 1);
+        return d;
+      default:
+        // '>1 Month' -> user editable, don't override
+        return endDate;
     }
-  }, [duration, startDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, duration, endDate]);
 
-  const loadUserData = async () => {
-    try {
-      const userData = await AsyncStorage.getItem('userDetails');
-      if (userData) {
-        const user = JSON.parse(userData);
-        setUserName(user.name || 'User');
-        setFlatNumber(user.flatNumber || '');
-        setBuilding(user.building || '');
-        setLocation(
-          user.flatNumber && user.building
-            ? `Block - ${user.flatNumber}, ${user.building}`
-            : ''
-        );
+  // Only sync state if timestamp actually changes, to avoid infinite loops.
+  useEffect(() => {
+    if (duration !== '>1 Month') {
+      const nextTs = computedEnd instanceof Date ? computedEnd.getTime() : 0;
+      const currTs = endDate instanceof Date ? endDate.getTime() : -1;
+      if (nextTs !== currTs) {
+        setEndDate(computedEnd);
       }
-    } catch (error) {
-      console.error('Error loading user data:', error);
     }
-  };
+  }, [computedEnd, duration, endDate]);
 
   const handleCreateInvite = async () => {
-    if (startDate >= endDate) {
-      Alert.alert('Invalid Dates', 'End date must be after start date');
-      return;
-    }
-
     try {
       const currentUser = auth.currentUser;
       if (!currentUser) {
         Alert.alert('Error', 'Please login to create invites');
         return;
       }
-
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       setPasscode(code);
 
       await addDoc(collection(db, 'invites'), {
         userId: currentUser.uid,
-        userName: userName,
-        flatNumber: flatNumber,
-        building: building,
-        location: location,
+        userName,
+        flatNumber,
+        building,
+        location: location || `${building}, Flat ${flatNumber}`,
         passcode: code,
         type: 'frequent',
-        duration: duration,
+        duration,
         startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
+        endDate: computedEnd.toISOString(),
         createdAt: serverTimestamp(),
-        expiresAt: endDate,
+        expiresAt: computedEnd,
         isActive: true,
       });
 
@@ -106,41 +116,48 @@ export default function FrequentVisitorInvite() {
 
   const handleCopyToClipboard = async () => {
     try {
+      if (!passcode) {
+        Alert.alert('No Passcode', 'Create an invite first to copy the passcode.');
+        return;
+      }
       await Clipboard.setStringAsync(passcode);
       Alert.alert('✅ Copied!', 'Passcode copied to clipboard');
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to copy passcode');
     }
   };
 
-  const createInviteMessage = () => {
-    return `🏠 *Frequent Visitor Invite from ${userName}*\n\n` +
-      `📍 Location: ${location}\n` +
-      `📅 Valid from: ${startDate.toDateString()}\n` +
-      `📅 Valid until: ${endDate.toDateString()}\n` +
-      `⏰ Duration: ${duration}\n` +
-      `🔑 Passcode: *${passcode}*\n\n` +
-      `This passcode allows entry during the specified period.`;
-  };
+  const createInviteMessage = () =>
+    `🏠 *Frequent Visitor Invite from ${userName}*\n\n` +
+    `📍 Location: ${location || `${building}, Flat ${flatNumber}`}\n` +
+    `📅 Valid from: ${startDate.toDateString()}\n` +
+    `📅 Valid until: ${computedEnd.toDateString()}\n` +
+    `⏰ Duration: ${duration}\n` +
+    `🔑 Passcode: *${passcode}*\n\n` +
+    `This passcode allows entry during the specified period.`;
 
   const handleWhatsAppShare = async () => {
     if (!passcode) {
       Alert.alert('Create Invite First', 'Please create an invite before sharing');
       return;
     }
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      const whatsappUrl = `whatsapp://send?text=${encodedMessage}`;
+      const encoded = encodeURIComponent(createInviteMessage());
+      const schemeURL = `whatsapp://send?text=${encoded}`;
+      const httpsURL = `https://wa.me/?text=${encoded}`;
 
-      const supported = await Linking.canOpenURL(whatsappUrl);
-      if (supported) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        Alert.alert('WhatsApp Not Found', 'WhatsApp is not installed on your device.');
+      const canOpenScheme = await Linking.canOpenURL(schemeURL);
+      if (canOpenScheme) {
+        await Linking.openURL(schemeURL);
+        return;
       }
-    } catch (error) {
+      const canOpenHttps = await Linking.canOpenURL(httpsURL);
+      if (canOpenHttps) {
+        await Linking.openURL(httpsURL);
+        return;
+      }
+      Alert.alert('WhatsApp Not Found', 'Could not open WhatsApp.');
+    } catch {
       Alert.alert('Error', 'Failed to open WhatsApp');
     }
   };
@@ -150,20 +167,16 @@ export default function FrequentVisitorInvite() {
       Alert.alert('Create Invite First', 'Please create an invite before sharing');
       return;
     }
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      
-      let smsUrl = Platform.OS === 'ios' ? `sms:&body=${encodedMessage}` : `sms:?body=${encodedMessage}`;
-
+      const encoded = encodeURIComponent(createInviteMessage());
+      const smsUrl = Platform.OS === 'ios' ? `sms:&body=${encoded}` : `sms:?body=${encoded}`;
       const supported = await Linking.canOpenURL(smsUrl);
       if (supported) {
         await Linking.openURL(smsUrl);
       } else {
         Alert.alert('Error', 'Unable to open SMS app');
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to open SMS');
     }
   };
@@ -173,7 +186,6 @@ export default function FrequentVisitorInvite() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.scrollContainer}>
-          
           {/* Header */}
           <View style={styles.headerRow}>
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -194,12 +206,11 @@ export default function FrequentVisitorInvite() {
 
           {/* Form Card */}
           <View style={styles.card}>
-            
-            {/* Duration Selection */}
+            {/* Duration */}
             <View style={styles.inputContainer}>
               <Text style={styles.floatingLabel}>Allow entry for</Text>
               <View style={styles.durationRow}>
-                {DURATION_OPTIONS.map(opt => (
+                {DURATION_OPTIONS.map((opt) => (
                   <TouchableOpacity
                     key={opt}
                     style={[styles.durationChip, duration === opt && styles.durationChipActive]}
@@ -222,6 +233,7 @@ export default function FrequentVisitorInvite() {
                 onChange={setStartDate}
                 mode="date"
                 minimumDate={new Date()}
+                placeholder="Pick start date"
               />
             </View>
 
@@ -229,28 +241,25 @@ export default function FrequentVisitorInvite() {
             <View style={styles.inputContainer}>
               <Text style={styles.floatingLabel}>End Date</Text>
               <CrossPlatformDatePicker
-                value={endDate}
+                value={computedEnd}
                 onChange={setEndDate}
                 mode="date"
                 minimumDate={startDate}
                 disabled={duration !== '>1 Month'}
+                placeholder="Pick end date"
               />
               {duration !== '>1 Month' && (
                 <Text style={styles.helperText}>Auto-calculated based on duration</Text>
               )}
             </View>
 
-            {/* Create Invite Button */}
-            <TouchableOpacity
-              style={styles.createBtn}
-              onPress={handleCreateInvite}
-              activeOpacity={0.8}
-            >
+            {/* Create Invite */}
+            <TouchableOpacity style={styles.createBtn} onPress={handleCreateInvite} activeOpacity={0.8}>
               <Ionicons name="add-circle" size={22} color="#313131" style={{ marginRight: 8 }} />
               <Text style={styles.createBtnText}>Create Invite</Text>
             </TouchableOpacity>
 
-            {/* Passcode Display */}
+            {/* Passcode + Share */}
             {inviteCreated && passcode && (
               <View style={styles.passcodeSection}>
                 <View style={styles.passcodeBox}>
@@ -262,20 +271,20 @@ export default function FrequentVisitorInvite() {
                     <Text style={styles.copyText}>Copy Passcode</Text>
                   </TouchableOpacity>
 
-                  {/* Validity Info */}
+                  {/* Validity */}
                   <View style={styles.validityCard}>
                     <Ionicons name="time-outline" size={20} color="#666" />
                     <View style={styles.validityInfo}>
                       <Text style={styles.validityLabel}>Valid Period</Text>
                       <Text style={styles.validityText}>
-                        {startDate.toLocaleDateString('en-IN')} - {endDate.toLocaleDateString('en-IN')}
+                        {startDate.toLocaleDateString('en-IN')} - {computedEnd.toLocaleDateString('en-IN')}
                       </Text>
                       <Text style={styles.validitySubtext}>{duration} access</Text>
                     </View>
                   </View>
                 </View>
 
-                {/* Share Buttons */}
+                {/* Share */}
                 <Text style={styles.shareTitle}>Share Invite</Text>
                 <View style={styles.shareButtonsContainer}>
                   <TouchableOpacity style={[styles.shareButton, styles.whatsappButton]} onPress={handleWhatsAppShare} activeOpacity={0.85}>
@@ -290,7 +299,6 @@ export default function FrequentVisitorInvite() {
                 </View>
               </View>
             )}
-
           </View>
         </ScrollView>
       </SafeAreaView>

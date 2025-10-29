@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
 import { getAuth } from 'firebase/auth';
 import { addDoc, collection, getFirestore, serverTimestamp } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CrossPlatformDatePicker } from '../components/CrossPlatformDatePicker';
@@ -20,7 +20,7 @@ export default function PartyGroupInvite() {
   const [flatNumber, setFlatNumber] = useState('');
   const [building, setBuilding] = useState('');
   const [location, setLocation] = useState('');
-  
+
   const [date, setDate] = useState(new Date());
   const [startTime, setStartTime] = useState(new Date());
 
@@ -55,6 +55,25 @@ export default function PartyGroupInvite() {
     }
   };
 
+  // ---- Time helpers ----
+  const computeExpiry = () => {
+    const hours = parseInt(validFor.replace(/\D/g, ''), 10) || 8;
+    const expiry = new Date(date);
+    expiry.setHours(startTime.getHours() + hours);
+    expiry.setMinutes(startTime.getMinutes());
+    expiry.setSeconds(0, 0);
+    return expiry;
+  };
+
+  const expiryMemo = useMemo(() => computeExpiry(), [date, startTime, validFor]);
+
+  const formatTimeShort = (d) =>
+    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const formatEndTimeForField = () =>
+    expiryMemo.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+  // ---- Actions ----
   const handleCreateInvite = async () => {
     if (!guestCount && !customGuests) {
       Alert.alert('Required', 'Please select number of guests');
@@ -71,25 +90,20 @@ export default function PartyGroupInvite() {
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       setPasscode(code);
 
-      const hours = parseInt(validFor.replace(/\D/g, '')) || 8;
-      const expiryDate = new Date(date);
-      expiryDate.setHours(startTime.getHours() + hours);
-      expiryDate.setMinutes(startTime.getMinutes());
-
       await addDoc(collection(db, 'invites'), {
         userId: currentUser.uid,
-        userName: userName,
-        flatNumber: flatNumber,
-        building: building,
-        location: location,
+        userName,
+        flatNumber,
+        building,
+        location,
         passcode: code,
         type: 'party',
         date: date.toISOString(),
         startTime: startTime.toISOString(),
-        validFor: validFor,
+        validFor,
         guestCount: customGuests || guestCount,
         createdAt: serverTimestamp(),
-        expiresAt: expiryDate,
+        expiresAt: expiryMemo, // Firestore stores Date as Timestamp
         isActive: true,
       });
 
@@ -101,8 +115,13 @@ export default function PartyGroupInvite() {
     }
   };
 
+  // ✅ Restored function (fixes ReferenceError)
   const handleCopyToClipboard = async () => {
     try {
+      if (!passcode) {
+        Alert.alert('No Passcode', 'Create an invite first to copy the passcode.');
+        return;
+      }
       await Clipboard.setStringAsync(passcode);
       Alert.alert('✅ Copied!', 'Passcode copied to clipboard');
     } catch (error) {
@@ -112,39 +131,43 @@ export default function PartyGroupInvite() {
 
   const createInviteMessage = () => {
     const finalGuestCount = customGuests || guestCount;
-    const hours = parseInt(validFor.replace(/\D/g, '')) || 8;
-    const expiryDate = new Date(date);
-    expiryDate.setHours(startTime.getHours() + hours);
-    expiryDate.setMinutes(startTime.getMinutes());
-    
-    return `🎉 *Party/Group Invite from ${userName}*\n\n` +
-      `📍 Location: ${location}\n` +
+    return (
+      `🎉 *Party/Group Invite from ${userName}*\n\n` +
+      `📍 Location: ${location || '—'}\n` +
       `📅 Date: ${date.toDateString()}\n` +
-      `⏰ Time: ${startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n` +
+      `⏰ Time: ${formatTimeShort(startTime)}\n` +
       `⌛ Valid for: ${validFor}\n` +
       `👥 Expected Guests: ${finalGuestCount}\n` +
       `🔑 Passcode: *${passcode}*\n` +
-      `⏰ Valid until: ${expiryDate.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}\n\n` +
-      `Please use this passcode to enter the premises.`;
+      `⏰ Valid until: ${expiryMemo.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}\n\n` +
+      `Please use this passcode to enter the premises.`
+    );
   };
 
+  // iOS WhatsApp: try scheme then https fallback
   const handleWhatsAppShare = async () => {
     if (!passcode) {
       Alert.alert('Create Invite First', 'Please create an invite before sharing');
       return;
     }
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      const whatsappUrl = `whatsapp://send?text=${encodedMessage}`;
+      const message = encodeURIComponent(createInviteMessage());
+      const schemeURL = `whatsapp://send?text=${message}`;
+      const httpsURL = `https://wa.me/?text=${message}`;
 
-      const supported = await Linking.canOpenURL(whatsappUrl);
-      if (supported) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        Alert.alert('WhatsApp Not Found', 'WhatsApp is not installed on your device.');
+      const canOpenScheme = await Linking.canOpenURL(schemeURL);
+      if (canOpenScheme) {
+        await Linking.openURL(schemeURL);
+        return;
       }
+
+      const canOpenHttps = await Linking.canOpenURL(httpsURL);
+      if (canOpenHttps) {
+        await Linking.openURL(httpsURL);
+        return;
+      }
+
+      Alert.alert('WhatsApp Not Found', 'Could not open WhatsApp.');
     } catch (error) {
       Alert.alert('Error', 'Failed to open WhatsApp');
     }
@@ -155,12 +178,11 @@ export default function PartyGroupInvite() {
       Alert.alert('Create Invite First', 'Please create an invite before sharing');
       return;
     }
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      
-      let smsUrl = Platform.OS === 'ios' ? `sms:&body=${encodedMessage}` : `sms:?body=${encodedMessage}`;
+      const encodedMessage = encodeURIComponent(createInviteMessage());
+      const smsUrl = Platform.OS === 'ios'
+        ? `sms:&body=${encodedMessage}`
+        : `sms:?body=${encodedMessage}`;
 
       const supported = await Linking.canOpenURL(smsUrl);
       if (supported) {
@@ -173,23 +195,14 @@ export default function PartyGroupInvite() {
     }
   };
 
-  const getExpiryTime = () => {
-    const hours = parseInt(validFor.replace(/\D/g, '')) || 8;
-    const expiryDate = new Date(date);
-    expiryDate.setHours(startTime.getHours() + hours);
-    expiryDate.setMinutes(startTime.getMinutes());
-    return expiryDate.toLocaleString('en-IN', { 
-      dateStyle: 'medium', 
-      timeStyle: 'short' 
-    });
-  };
+  const getExpiryTime = () =>
+    expiryMemo.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
 
   return (
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.scrollContainer}>
-          
           <View style={styles.headerRow}>
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
               <Ionicons name="arrow-back" size={24} color="#363636" />
@@ -207,7 +220,7 @@ export default function PartyGroupInvite() {
           </View>
 
           <View style={styles.card}>
-            
+
             {/* Date Picker */}
             <View style={styles.inputContainer}>
               <Text style={styles.floatingLabel}>Select Date</Text>
@@ -215,10 +228,13 @@ export default function PartyGroupInvite() {
                 value={date}
                 onChange={setDate}
                 mode="date"
+                placeholder="Pick a date"
+                minimumDate={new Date()}
+                maximumDate={new Date(Date.now() + 1000 * 60 * 60 * 24 * 365)}
               />
             </View>
 
-            {/* Time and Duration Row */}
+            {/* Time / Duration */}
             <View style={styles.rowContainer}>
               <View style={styles.halfWidth}>
                 <View style={styles.inputContainer}>
@@ -227,6 +243,9 @@ export default function PartyGroupInvite() {
                     value={startTime}
                     onChange={setStartTime}
                     mode="time"
+                    placeholder="Pick a time"
+                    is24Hour={true}
+                    minuteInterval={5}
                   />
                 </View>
               </View>
@@ -246,6 +265,23 @@ export default function PartyGroupInvite() {
                       />
                     </View>
                   </View>
+                </View>
+              </View>
+            </View>
+
+            {/* End Time (computed, read-only) */}
+            <View style={styles.inputContainer}>
+              <Text style={styles.floatingLabel}>End Time</Text>
+              <View style={styles.modernInput}>
+                <View style={styles.inputContent}>
+                  <Ionicons name="time-outline" size={20} color="#276CF0" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.inputTextEditable}
+                    value={formatEndTimeForField()}
+                    editable={false}
+                    placeholder="Computed automatically"
+                    placeholderTextColor="#999"
+                  />
                 </View>
               </View>
             </View>
@@ -273,7 +309,7 @@ export default function PartyGroupInvite() {
                 How many guests? <Text style={styles.required}>*</Text>
               </Text>
               <View style={styles.guestRow}>
-                {GUEST_OPTIONS.map(opt => (
+                {GUEST_OPTIONS.map((opt) => (
                   <TouchableOpacity
                     key={opt}
                     style={[styles.guestChip, guestCount === opt && !customGuests && styles.guestChipActive]}
@@ -288,10 +324,7 @@ export default function PartyGroupInvite() {
                     </Text>
                   </TouchableOpacity>
                 ))}
-                <TouchableOpacity 
-                  style={[styles.guestChip, customGuests && styles.guestChipActive]}
-                  activeOpacity={1}
-                >
+                <TouchableOpacity style={[styles.guestChip, customGuests && styles.guestChipActive]} activeOpacity={1}>
                   <TextInput
                     style={[styles.guestChipText, customGuests && styles.guestChipTextActive]}
                     placeholder="Custom"
@@ -307,11 +340,7 @@ export default function PartyGroupInvite() {
               </View>
             </View>
 
-            <TouchableOpacity
-              style={styles.createBtn}
-              onPress={handleCreateInvite}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.createBtn} onPress={handleCreateInvite} activeOpacity={0.8}>
               <Ionicons name="add-circle" size={22} color="#313131" style={{ marginRight: 8 }} />
               <Text style={styles.createBtnText}>Create Invite</Text>
             </TouchableOpacity>

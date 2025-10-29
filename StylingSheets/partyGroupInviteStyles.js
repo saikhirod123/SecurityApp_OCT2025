@@ -1,6 +1,7 @@
-import { Dimensions, StyleSheet } from 'react-native';
+// StylingSheets/partyGroupInviteStyles.js
+import { Dimensions, Platform, StyleSheet } from 'react-native';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 export const styles = StyleSheet.create({
   safeArea: { 
@@ -10,7 +11,9 @@ export const styles = StyleSheet.create({
   
   scrollContainer: { 
     flexGrow: 1, 
-    paddingBottom: 24 
+    paddingBottom: 24,
+    paddingHorizontal: 16,        // added for consistent side padding
+    paddingTop: 8,                // slight top breathing room
   },
   
   // Header Styles
@@ -18,7 +21,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,         // now handled by scrollContainer
     paddingTop: 12,
     paddingBottom: 12,
     backgroundColor: '#fff',
@@ -46,6 +49,8 @@ export const styles = StyleSheet.create({
     paddingTop: width * 0.08,
     paddingBottom: width * 0.06,
     paddingHorizontal: 20,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
   },
   
   bannerIcon: { 
@@ -73,7 +78,7 @@ export const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     marginTop: 2,
     paddingVertical: 28,
-    paddingHorizontal: width * 0.05,
+    paddingHorizontal: 16,         // align with scroll padding
     flex: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
@@ -108,6 +113,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 14,
     paddingVertical: 14,
+    // if RN < 0.71 and 'gap' not supported, keep as-is
   },
   
   inputIcon: { 
@@ -126,7 +132,19 @@ export const styles = StyleSheet.create({
     fontSize: 16,
     color: '#2C3E50',
     fontWeight: '500',
-    padding: 0,
+    paddingVertical: Platform.OS === 'ios' ? 4 : 0, // nicer caret on iOS
+    paddingHorizontal: 0,
+  },
+
+  // Optional: style applied when using read-only input (End Time)
+  inputTextReadOnly: {
+    flex: 1,
+    fontSize: 16,
+    color: '#2C3E50',
+    fontWeight: '500',
+    opacity: 0.9,
+    paddingVertical: Platform.OS === 'ios' ? 4 : 0,
+    paddingHorizontal: 0,
   },
   
   required: { 

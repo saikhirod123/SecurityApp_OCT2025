@@ -14,7 +14,7 @@ export default function QuickInvite() {
   const router = useRouter();
   const db = getFirestore(app);
   const auth = getAuth(app);
-  
+
   const [userName, setUserName] = useState('User');
   const [flatNumber, setFlatNumber] = useState('');
   const [building, setBuilding] = useState('');
@@ -31,28 +31,25 @@ export default function QuickInvite() {
     try {
       const userData = await AsyncStorage.getItem('userDetails');
       const currentUser = auth.currentUser;
-      
+
       if (userData) {
         const user = JSON.parse(userData);
         setUserName(user.name || 'User');
         setFlatNumber(user.flatNumber || '');
         setBuilding(user.building || '');
       }
-      
-      if (currentUser) {
-        setUserId(currentUser.uid);
-      }
+      if (currentUser) setUserId(currentUser.uid);
 
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       setPasscode(code);
 
+      // 4 hours validity
       const now = new Date();
       const expiry = new Date(now.getTime() + 4 * 60 * 60 * 1000);
       setExpiryTimestamp(expiry);
-      setValidUntil(expiry.toLocaleString('en-IN', { 
-        dateStyle: 'medium', 
-        timeStyle: 'short' 
-      }));
+      setValidUntil(
+        expiry.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+      );
 
       if (currentUser) {
         await addDoc(collection(db, 'invites'), {
@@ -63,7 +60,7 @@ export default function QuickInvite() {
           passcode: code,
           type: 'quick',
           createdAt: serverTimestamp(),
-          expiresAt: expiry,
+          expiresAt: expiry, // Firestore stores as Timestamp
           isActive: true,
         });
       }
@@ -83,13 +80,12 @@ export default function QuickInvite() {
     return true;
   };
 
-  const createInviteMessage = () => {
-    return `🏠 *Guest Invite from ${userName}*\n\n` +
-      `📍 Location: ${building}, Flat ${flatNumber}\n` +
-      `🔑 Passcode: *${passcode}*\n` +
-      `⏰ Valid until: ${validUntil}\n\n` +
-      `Please use this passcode to enter the premises.`;
-  };
+  const createInviteMessage = () =>
+    `🏠 *Guest Invite from ${userName}*\n\n` +
+    `📍 Location: ${building}, Flat ${flatNumber}\n` +
+    `🔑 Passcode: *${passcode}*\n` +
+    `⏰ Valid until: ${validUntil}\n\n` +
+    `Please use this passcode to enter the premises.`;
 
   const handleCopyToClipboard = async () => {
     try {
@@ -100,20 +96,25 @@ export default function QuickInvite() {
     }
   };
 
+  // iOS-safe WhatsApp open: try scheme first, then https fallback
   const handleWhatsAppShare = async () => {
     if (!validateExpiry()) return;
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      const whatsappUrl = `whatsapp://send?text=${encodedMessage}`;
+      const encoded = encodeURIComponent(createInviteMessage());
+      const schemeURL = `whatsapp://send?text=${encoded}`;
+      const httpsURL  = `https://wa.me/?text=${encoded}`;
 
-      const supported = await Linking.canOpenURL(whatsappUrl);
-      if (supported) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        Alert.alert('WhatsApp Not Found', 'WhatsApp is not installed on your device.', [{ text: 'OK' }]);
+      const canOpenScheme = await Linking.canOpenURL(schemeURL);
+      if (canOpenScheme) {
+        await Linking.openURL(schemeURL);
+        return;
       }
+      const canOpenHttps = await Linking.canOpenURL(httpsURL);
+      if (canOpenHttps) {
+        await Linking.openURL(httpsURL);
+        return;
+      }
+      Alert.alert('WhatsApp Not Found', 'Could not open WhatsApp.');
     } catch (error) {
       Alert.alert('Error', 'Failed to open WhatsApp. Please try again.');
     }
@@ -121,13 +122,9 @@ export default function QuickInvite() {
 
   const handleSMSShare = async () => {
     if (!validateExpiry()) return;
-
     try {
-      const message = createInviteMessage();
-      const encodedMessage = encodeURIComponent(message);
-      
-      let smsUrl = Platform.OS === 'ios' ? `sms:&body=${encodedMessage}` : `sms:?body=${encodedMessage}`;
-
+      const encoded = encodeURIComponent(createInviteMessage());
+      const smsUrl = Platform.OS === 'ios' ? `sms:&body=${encoded}` : `sms:?body=${encoded}`;
       const supported = await Linking.canOpenURL(smsUrl);
       if (supported) {
         await Linking.openURL(smsUrl);
@@ -144,7 +141,7 @@ export default function QuickInvite() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.scrollContainer}>
-          
+          {/* Header */}
           <View style={styles.headerRow}>
             <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
               <Ionicons name="arrow-back" size={24} color="#363636" />
@@ -153,6 +150,7 @@ export default function QuickInvite() {
             <View style={styles.headerSpacer} />
           </View>
 
+          {/* Banner */}
           <View style={styles.bannerArea}>
             <MaterialCommunityIcons name="home-heart" size={48} color="#84601B" style={styles.bannerIcon} />
             <Text style={styles.inviteMsg}>
@@ -161,18 +159,19 @@ export default function QuickInvite() {
             </Text>
           </View>
 
+          {/* Card */}
           <View style={styles.card}>
             <View style={styles.passcodeContainer}>
               <View style={styles.passcodeLabelRow}>
                 <Ionicons name="key" size={22} color="#276CF0" />
                 <Text style={styles.passcodeLabel}>Your Guest Passcode</Text>
               </View>
-              
+
               <View style={styles.passcodeBox}>
                 <Text style={styles.passcodeText}>{passcode}</Text>
               </View>
-              
-              <TouchableOpacity 
+
+              <TouchableOpacity
                 style={styles.copyButton}
                 onPress={handleCopyToClipboard}
                 activeOpacity={0.7}
@@ -208,6 +207,7 @@ export default function QuickInvite() {
             </View>
           </View>
 
+          {/* Share */}
           <View style={styles.shareSection}>
             <Text style={styles.shareSectionTitle}>Share Invite</Text>
             <View style={styles.shareButtonsContainer}>
